@@ -1,25 +1,32 @@
-import datetime
-import json
-import os
 import urllib.parse
-from io import BytesIO
-
-import dotenv
+import json
 import jwt
-import numpy as np
-import pandas as pd
-import plotly
+import os
+import datetime
+
 import plotly.express as px
 import plotly.graph_objects as go
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
 from plotly.subplots import make_subplots
-from pymongo import MongoClient
-from scipy.stats.mstats import hmean
-from starlette.middleware.cors import CORSMiddleware
+import plotly
 
-from app.backend import (get_scenarios_ns, get_scenarios_return,
-                         get_scenarios_risk, get_scenarios_types)
+import pandas as pd
+import numpy as np
+from scipy.stats.mstats import hmean
+
+from pymongo import MongoClient
+from fastapi import FastAPI, Request
+from starlette.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+
+from app.backend import (
+    get_scenarios_return,
+    get_scenarios_risk,
+    get_scenarios_ns,
+    get_scenarios_types,
+)
+
+import dotenv
 
 dotenv.load_dotenv(".env")
 
@@ -636,12 +643,31 @@ async def sensitivity(request: Request):
     client = get_client(request)
     bm = [e for e in mongo["brands"].find({"client": client})]
     temp_df = pd.DataFrame(bm)
-    X = np.linspace(-1, 1)
-    y = temp_df["return"] * pd.DataFrame([X] * 4).T
+    X = np.linspace(
+        (-1+ temp_df["ly_budget"]).to_list(), (1 + temp_df["ly_budget"]).to_list()
+    )
+    y = (
+        (
+            (
+                (
+                    (
+                        pd.DataFrame(X) / 12 - temp_df["x_mean"].T
+                    )
+                    / temp_df["x_std"].T
+                )
+                * temp_df["return"].T
+                + temp_df["intercept"].T
+            )
+            * temp_df["y_std"].T
+            + temp_df["y_mean"].T
+        )
+        * 12
+        - temp_df["ly_sales"].T
+    ) * temp_df["price"].T
     y.columns = temp_df["brand"]
     fig = px.line(
         y.melt(),
-        x=np.array([X] * 4).flatten(),
+        x=np.array((len(y.columns) * [np.linspace(-1, 1)])).flatten(),
         y="value",
         color="brand",
         template="plotly_white",
@@ -682,17 +708,17 @@ async def sensitivity(request: Request):
         showline=True,
         linecolor="black",
         tickmode="array",
-        tickvals=[-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1],
+        tickvals=[-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10],
         ticktext=[
-            "-1€",
-            "-0.75€",
-            "-0.50€",
-            "-0.25€",
+            "-10€",
+            "-7.50€",
+            "-5€",
+            "-2.50€",
             "0€",
-            "+0.25€",
-            "+0.50€",
-            "+0.75€",
-            "+1€",
+            "+2.50€",
+            "+5€",
+            "+7.50€",
+            "+10€",
         ],
     )
     return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
@@ -1068,18 +1094,37 @@ async def get_export_scenario(
     res.loc["portfolio", "risk_score"] = risk_score
     res["ap_ns_ratio"] = res["ny_budget"] / res["ny_net_sales"]
 
-    temp_df = pd.DataFrame(res).filter(items=["ly_budget", "ny_budget", "ny_change", "ly_net_sales", "ny_net_sales", "ny_ns_change", "ap_ns_ratio"])
+    temp_df = pd.DataFrame(res).filter(
+        items=[
+            "ly_budget",
+            "ny_budget",
+            "ny_change",
+            "ly_net_sales",
+            "ny_net_sales",
+            "ny_ns_change",
+            "ap_ns_ratio",
+        ]
+    )
     temp_df["ny_change"] /= 100
     temp_df["ny_ns_change"] /= 100
-    temp_df.columns = pd.MultiIndex.from_tuples([("A&P", "Last year"), ("A&P", "New year"), ("A&P", "% Change"), ("Net Sales", "Last year"), ("Net Sales", "New year"), ("Net Sales", "% Change"), ("A&P/Net Sales", "")])
+    temp_df.columns = pd.MultiIndex.from_tuples(
+        [
+            ("A&P", "Last year"),
+            ("A&P", "New year"),
+            ("A&P", "% Change"),
+            ("Net Sales", "Last year"),
+            ("Net Sales", "New year"),
+            ("Net Sales", "% Change"),
+            ("A&P/Net Sales", ""),
+        ]
+    )
     buffer = BytesIO()
     with pd.ExcelWriter(buffer) as writer:
         temp_df.to_excel(writer)
     return StreamingResponse(
         BytesIO(buffer.getvalue()),
-        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; base64,',
-        headers={"Content-Disposition": f"attachment; filename=data.csv"}
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=data.csv"},
     )
 
     # return res.T.to_dict()  # new budget = sum of ny_budget
-

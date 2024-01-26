@@ -82,7 +82,7 @@ def get_risk_return(data, brand):
 
 def get_last_year(data, brand):
     brand_data = data.query("brand == @brand")
-    differential = brand_data.iloc[[-1, -12], 16].values
+    differential = brand_data.iloc[[-1, -12]]["y"].values
     growth_rate = differential[0] / differential[1]
     return brand_data.iloc[-12:].drop(columns=["brand", "ds"]).sum(), growth_rate
 
