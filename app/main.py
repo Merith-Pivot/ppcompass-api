@@ -309,7 +309,7 @@ async def get_scenario(
         .set_index("brand")
     )
     res = brands_mapping[
-        ["ly_budget", "ly_net_sales", "return_score", "risk_score", "drivers"]
+        ["ly_budget", "ly_net_sales", "ly_mvc", "return_score", "risk_score", "drivers"]
     ]
 
     if scenario_type:
@@ -340,6 +340,8 @@ async def get_scenario(
     ).values
 
     res["ny_net_sales"] = ns[0]
+    res["ny_mvc"] = res["ly_mvc"] / res["ly_net_sales"] * res["ny_net_sales"]
+    res["mvc_change"] = res["ny_mvc"] / res["ly_mvc"] * 100 - 100
     res["budget_share"] = res["ny_budget"] / res["ny_budget"].sum()
     return_score = sum(res["budget_share"] * res["return_score"])
     risk_score = hmean(res["risk_score"], weights=res["budget_share"])
@@ -1020,6 +1022,7 @@ async def datas(request: Request, brands, columns, start_date, end_date):
     columns = json.loads(columns) + ["Brand", "Date", "_id"]
     brands = json.loads(brands)
 
+#fillna
     brands_data = [
         e
         for e in mongo["brands_data"].find(
@@ -1036,95 +1039,3 @@ async def datas(request: Request, brands, columns, start_date, end_date):
     ]
     return brands_data
 
-
-@app.get("/export_scenario")
-async def get_export_scenario(
-    request: Request, budgets, budget, scenario_type, threshold=0.01
-):
-    scenario_type = scenario_type.capitalize()
-    client = get_client(request)
-    ny_budget = json.loads(budgets)
-    brands_mapping = (
-        pd.DataFrame([e for e in mongo["brands"].find({"client": client})])
-        .drop(columns="_id")
-        .set_index("brand")
-    )
-    res = brands_mapping[
-        ["ly_budget", "ly_net_sales", "return_score", "risk_score", "drivers"]
-    ]
-
-    if scenario_type:
-        temp_df = local_get_scenarios(client, budget, threshold)[0]
-        res["ny_change"] = temp_df.query("type == @scenario_type").values[0][: len(res)]
-    else:
-        res["ny_change"] = ny_budget
-    res["ny_budget"] = (res["ny_change"] + 100) / 100 * res["ly_budget"]
-    ns = (
-        (
-            (
-                (
-                    (
-                        (res[["ny_budget"]].T / 12 - brands_mapping["x_mean"].T)
-                        / brands_mapping["x_std"].T
-                    )
-                    * brands_mapping["return"].T
-                    + brands_mapping["intercept"].T
-                )
-                * brands_mapping["y_std"].T
-                + brands_mapping["y_mean"].T
-            )
-            * 12
-            - brands_mapping["ly_sales"].T
-            + (brands_mapping["ly_sales"].T * brands_mapping["growth_rate"].T)
-        )
-        * brands_mapping["price"].T
-    ).values
-
-    res["ny_net_sales"] = ns[0]
-    res["budget_share"] = res["ny_budget"] / res["ny_budget"].sum()
-    return_score = sum(res["budget_share"] * res["return_score"])
-    risk_score = hmean(res["risk_score"], weights=res["budget_share"])
-    # portfolio
-    res = res.T
-    res["portfolio"] = res.sum(axis=1)
-    res = res.T
-    res["ny_ns_change"] = (res["ny_net_sales"] / res["ly_net_sales"]) * 100 - 100
-    res["ny_budget_change"] = (res["ny_budget"] / res["ly_budget"]) * 100 - 100
-    res.loc["portfolio", "return_score"] = return_score
-    res.loc["portfolio", "risk_score"] = risk_score
-    res["ap_ns_ratio"] = res["ny_budget"] / res["ny_net_sales"]
-
-    temp_df = pd.DataFrame(res).filter(
-        items=[
-            "ly_budget",
-            "ny_budget",
-            "ny_change",
-            "ly_net_sales",
-            "ny_net_sales",
-            "ny_ns_change",
-            "ap_ns_ratio",
-        ]
-    )
-    temp_df["ny_change"] /= 100
-    temp_df["ny_ns_change"] /= 100
-    temp_df.columns = pd.MultiIndex.from_tuples(
-        [
-            ("A&P", "Last year"),
-            ("A&P", "New year"),
-            ("A&P", "% Change"),
-            ("Net Sales", "Last year"),
-            ("Net Sales", "New year"),
-            ("Net Sales", "% Change"),
-            ("A&P/Net Sales", ""),
-        ]
-    )
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer) as writer:
-        temp_df.to_excel(writer)
-    return StreamingResponse(
-        BytesIO(buffer.getvalue()),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=data.csv"},
-    )
-
-    # return res.T.to_dict()  # new budget = sum of ny_budget
