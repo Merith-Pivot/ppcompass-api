@@ -276,7 +276,6 @@ def get_scenarios_types(temp_df):
     agg_pos = temp_df["return"].astype(float).argmax()
     def_pos = temp_df["risk"].astype(float).argmin()
     pro_pos = (
-        ((temp_df["total_ns"] - temp_df["budget"]) / temp_df["total_ns"])
         (
             (
                 temp_df.query("type != 'Conservative'")["total_ns"]
